@@ -18,6 +18,17 @@ enum TypePosition {
     BehindPointer,
     Return,
     Parameter,
+    /// The target of a type-alias *declaration*.
+    ///
+    /// A typedef is a name, not a use. `typedef struct T T;` does not use `T`
+    /// by value -- it says what `T` means, and whether any use is by value is
+    /// decided at that use, which `AliasRef` already carries the position for.
+    ///
+    /// Verifying the declaration at `ByValue` refused the single most common
+    /// spelling of an opaque handle in C: `typedef struct sqlite3 sqlite3`,
+    /// `typedef struct lua_State lua_State`. The bare `struct T;` form worked,
+    /// which is why nothing noticed.
+    AliasTarget,
 }
 
 /// Closed-world verification performed before name allocation or source
@@ -246,7 +257,7 @@ impl<'a> SourceVerifier<'a> {
                     declaration.id,
                     "type_alias.target",
                     &alias.target,
-                    TypePosition::ByValue,
+                    TypePosition::AliasTarget,
                     aliases,
                     by_value_records,
                 );
@@ -492,7 +503,11 @@ impl<'a> SourceVerifier<'a> {
                         "RecordRef does not reference a record declaration",
                     );
                 };
-                if position != TypePosition::BehindPointer {
+                // Naming an opaque record is not using one. A use of the
+                // alias carries its own position, so `void f(T)` is still
+                // refused while `T *` is not.
+                if position != TypePosition::BehindPointer && position != TypePosition::AliasTarget
+                {
                     if self.requirement(owner, *target)? != ClosureRequirement::Definition {
                         return self.unsupported_type(
                             owner,
@@ -795,7 +810,8 @@ fn verify_rust_type(
             match item {
                 RustItem::Record(record)
                     if record.kind() == RustRecordKind::Opaque
-                        && position != TypePosition::BehindPointer =>
+                        && position != TypePosition::BehindPointer
+                        && position != TypePosition::AliasTarget =>
                 {
                     invariant("opaque record remains in a by-value Rust position")
                 }
