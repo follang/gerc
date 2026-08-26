@@ -435,9 +435,10 @@ fn certify_parc_rejections(harness: &Harness, executed: &mut BTreeSet<&'static s
         let error = unsupported
             .into_complete(&Selection::only([root]).expect("unsupported PARC root"))
             .expect_err("unsupported source must not cross the PARC completeness boundary");
+        // The refusal names the declaration rather than the package: the
+        // selected root is what `_BitInt(17)` made unsupported.
         assert!(error.blockers().iter().any(|blocker| {
-            matches!(blocker, CompletionBlocker::PackageIncomplete { reasons }
-                if reasons.iter().any(|reason| reason.code.as_str() == code))
+            matches!(blocker, CompletionBlocker::Unsupported { id, .. } if *id == root)
         }));
         executed.insert(case);
     }

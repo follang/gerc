@@ -754,7 +754,12 @@ pub(crate) fn verify_projection(projection: &ValidatedRustProjection) -> Generat
             }
             RustItem::TypeAlias(alias) => {
                 aliases.push(alias.declaration());
-                verify_rust_type(alias.target(), TypePosition::ByValue, &items, &mut aliases)?;
+                verify_rust_type(
+                    alias.target(),
+                    TypePosition::AliasTarget,
+                    &items,
+                    &mut aliases,
+                )?;
             }
             RustItem::Variable(variable) => {
                 if variable.thread_local() {
@@ -904,10 +909,32 @@ mod tests {
                 source: metadata(alias_id, "opaque_alias"),
             }),
         ]);
-        assert!(verify_projection(&opaque_projection)
-            .expect_err("opaque by-value alias must fail")
-            .to_string()
-            .contains("opaque"));
+        // `typedef struct T T;` is the opaque-handle idiom every real C library
+        // uses. The alias names the record; it does not use one.
+        verify_projection(&opaque_projection).expect("naming an opaque record is not using one");
+
+        // What must still fail is a *use* of that alias by value, which the
+        // alias walk catches because it recurses at the caller's position.
+        let mut aliases = Vec::new();
+        let items = opaque_projection
+            .items()
+            .iter()
+            .map(|item| (item.declaration(), item))
+            .collect::<BTreeMap<_, _>>();
+        let alias_use = named_type(alias_id, "opaque_alias");
+        assert!(
+            verify_rust_type(&alias_use, TypePosition::ByValue, &items, &mut aliases)
+                .expect_err("opaque behind an alias is still opaque by value")
+                .to_string()
+                .contains("opaque")
+        );
+        assert!(verify_rust_type(
+            &alias_use,
+            TypePosition::BehindPointer,
+            &items,
+            &mut Vec::new()
+        )
+        .is_ok());
 
         let first = declaration_id("cycle_a");
         let second = declaration_id("cycle_b");
