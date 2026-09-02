@@ -45,15 +45,48 @@ fn generate_inner(request: GenerationRequest<'_>) -> GenerationResult<Generation
 
     let mut global_names = NameAllocator::default();
     let mut declaration_names = BTreeMap::new();
-    for entry in closure {
-        let declaration =
-            source
-                .declaration(entry.declaration())
-                .ok_or(GenerationError::MissingDeclaration {
-                    declaration: entry.declaration(),
-                })?;
-        let name = global_names.declaration_name(declaration)?;
-        declaration_names.insert(declaration.id, name);
+    // A `typedef struct X X;` gives the same name to the completed struct and
+    // to a redundant self-alias. Rust has one name namespace, so only one item
+    // can hold `X`; the other is left with a synthesized hash name. The struct
+    // is what carries the fields a caller reads, so it takes the clean name and
+    // the redundant alias is named after it -- otherwise the struct is spelled
+    // `X_<hash>`, which no downstream author can name. This defers only that
+    // exact case: an opaque struct or a pointer typedef keeps its current name.
+    let is_redundant_self_alias = |declaration: &SourceDeclaration| -> bool {
+        let SourceDeclarationKind::TypeAlias(alias) = &declaration.kind else {
+            return false;
+        };
+        let CTypeKind::RecordRef(target) = &alias.target.kind else {
+            return false;
+        };
+        let Some(record_declaration) = source.declaration(*target) else {
+            return false;
+        };
+        let SourceDeclarationKind::Record(record) = &record_declaration.kind else {
+            return false;
+        };
+        record.completeness == RecordCompleteness::Complete
+            && match (&declaration.name, &record_declaration.name) {
+                (Some(alias_name), Some(record_name)) => {
+                    alias_name.normalized == record_name.normalized
+                }
+                _ => false,
+            }
+    };
+    for pass_redundant in [false, true] {
+        for entry in closure {
+            let declaration =
+                source
+                    .declaration(entry.declaration())
+                    .ok_or(GenerationError::MissingDeclaration {
+                        declaration: entry.declaration(),
+                    })?;
+            if is_redundant_self_alias(declaration) != pass_redundant {
+                continue;
+            }
+            let name = global_names.declaration_name(declaration)?;
+            declaration_names.insert(declaration.id, name);
+        }
     }
 
     let context = LoweringContext {
