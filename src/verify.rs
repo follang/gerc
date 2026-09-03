@@ -363,7 +363,12 @@ impl<'a> SourceVerifier<'a> {
         self.verify_type_metadata(owner, path, ty)?;
         match &ty.kind {
             CTypeKind::Void => {
-                if !matches!(position, TypePosition::Return | TypePosition::BehindPointer) {
+                if !matches!(
+                    position,
+                    TypePosition::Return
+                        | TypePosition::BehindPointer
+                        | TypePosition::AliasTarget
+                ) {
                     return self.unsupported_type(owner, path, "void appears in a value position");
                 }
             }
@@ -783,7 +788,10 @@ fn verify_rust_type(
     }
     match ty.kind() {
         RustTypeKind::Void
-            if !matches!(position, TypePosition::Return | TypePosition::BehindPointer) =>
+            if !matches!(
+                position,
+                TypePosition::Return | TypePosition::BehindPointer | TypePosition::AliasTarget
+            ) =>
         {
             invariant("void remains in a post-lowering value position")
         }
@@ -1006,6 +1014,30 @@ mod tests {
             .expect_err("nonzero union offset must fail")
             .to_string()
             .contains("union"));
+    }
+
+    #[test]
+    fn void_is_accepted_in_an_alias_target_but_refused_by_value() {
+        let void = RustType {
+            qualifiers: TypeQualifiers::NONE,
+            nullability: Nullability::Unspecified,
+            support: SupportStatus::Supported,
+            kind: RustTypeKind::Void,
+        };
+        verify_rust_type(
+            &void,
+            TypePosition::AliasTarget,
+            &BTreeMap::new(),
+            &mut Vec::new(),
+        )
+        .expect("typedef void handle projects as an opaque alias");
+        assert!(verify_rust_type(
+            &void,
+            TypePosition::ByValue,
+            &BTreeMap::new(),
+            &mut Vec::new(),
+        )
+        .is_err());
     }
 
     fn projection(items: Vec<RustItem>) -> ValidatedRustProjection {
